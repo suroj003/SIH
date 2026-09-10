@@ -9,6 +9,9 @@ const pool = require("./db");
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.get("/", (req, res) => {
+    res.send("LandSetu API is running");
+});
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
