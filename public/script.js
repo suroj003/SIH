@@ -5,160 +5,11 @@
 
 
 /* ================= APPLICATION STATE ================= */
+let caseData = [];
+let projects = [];
+let usersData = [];
+let grievanceData = [];
 
-const state = {
-
-    role: "citizen",
-
-    page: "dashboard",
-
-    user: "Citizen",
-
-    notifications: [
-
-        [
-            "Compensation assessment updated",
-            "2 hours ago"
-        ],
-
-        [
-            "Land document verification completed",
-            "Yesterday"
-        ],
-
-        [
-            "New project notification",
-            "2 days ago"
-        ]
-
-    ]
-
-};
-/* ================= REAL API LAYER ================= */
-
-let authToken = sessionStorage.getItem("ls_token") || null;
-
-async function apiRequest(path, options = {}) {
-    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-
-    const res = await fetch(path, { ...options, headers });
-
-    let body = null;
-    try { body = await res.json(); } catch (e) { /* empty/non-JSON body */ }
-
-    if (!res.ok) {
-        throw new Error((body && body.message) || `Request failed (${res.status})`);
-    }
-    return body;
-}
-
-function humanizeStatus(value) {
-    return String(value)
-        .split("_")
-        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ");
-}
-
-/* ================= DEMO LAND DATA ================= */
-
-let landData = [];
-
-async function loadLands() {
-    try {
-        const data = await apiRequest("/api/lands");
-        landData = data.lands.map(row => ({
-            id: row.land_code,
-            land_id: row.land_id,
-            survey: row.survey_number,
-            owner: `Owner #${row.owner_id}`,
-            area: `${row.area_acres} acres`,
-            village: row.village,
-            project: row.project_id ? `Project #${row.project_id}` : "—",
-            status: humanizeStatus(row.status)
-        }));
-    } catch (err) {
-        console.error("Failed to load land records:", err.message);
-        landData = [];
-    }
-
-    const container = document.getElementById("landTable");
-    if (container) container.innerHTML = landTable(landData);
-}
-
-
-/* ================= ACQUISITION CASES ================= */
-
-const caseData = [
-
-    {
-        id: "ACQ-2401",
-        survey: "125/4",
-        owner: "Rajesh Kumar",
-        project: "NH Expansion",
-        status: "Land Verification",
-        date: "09 Sep 2026"
-    },
-
-    {
-        id: "ACQ-2402",
-        survey: "128/2",
-        owner: "Anita Das",
-        project: "NH Expansion",
-        status: "Compensation Pending",
-        date: "08 Sep 2026"
-    },
-
-    {
-        id: "ACQ-2403",
-        survey: "131/7",
-        owner: "Mohan Lal",
-        project: "Rail Corridor",
-        status: "Completed",
-        date: "06 Sep 2026"
-    },
-
-    {
-        id: "ACQ-2404",
-        survey: "142/1",
-        owner: "Priya Sharma",
-        project: "Ring Road",
-        status: "Document Review",
-        date: "04 Sep 2026"
-    }
-
-];
-
-
-/* ================= PROJECT DATA ================= */
-
-const projects = [
-
-    {
-        name: "NH Expansion",
-        district: "Cachar",
-        land: 120,
-        cases: 86,
-        progress: 72
-    },
-
-    {
-        name: "Rail Corridor",
-        district: "Cachar",
-        land: 85,
-        cases: 61,
-        progress: 81
-    },
-
-    {
-        name: "Ring Road",
-        district: "Hailakandi",
-        land: 160,
-        cases: 102,
-        progress: 48
-    }
-
-];
 
 
 /* =====================================================
@@ -441,26 +292,12 @@ function showPage(page) {
     content.innerHTML =
         (pages[page] || dashboardPage)();
 
-
-    if (page === "dashboard") {
-
-        initializeDashboardCharts();
-
-    }
-
-
-    if (page === "analytics") {
-
-        initializeAnalyticsChart();
-
-    }
-
-
-    if (page === "projects") {
-
-        initializeProjectChart();
-
-    }
+if (page === "dashboard") { initializeDashboardCharts(); }
+if (page === "analytics") { initializeAnalyticsChart(); }
+if (page === "cases") { loadCases(); }
+if (page === "projects") { loadProjects(); }
+if (page === "users") { loadUsers(); }
+if (page === "grievances") { loadGrievances(); }
 
 
     if (window.innerWidth < 760) {
@@ -2274,180 +2111,39 @@ function documentsPage() {
 ===================================================== */
 
 function grievancesPage() {
-
-    const grievances = [
-
-        [
-            "GRV-1088",
-            "Compensation delay",
-            "ACQ-2402",
-            "Under Review",
-            "orange"
-        ],
-
-        [
-            "GRV-1071",
-            "Land record correction",
-            "ACQ-2401",
-            "Resolved",
-            "green"
-        ],
-
-        [
-            "GRV-1062",
-            "Document verification",
-            "ACQ-2404",
-            "Open",
-            "blue"
-        ]
-
-    ];
-
-
     return `
-
         <div class="page-intro">
-
             <div>
-
-                <h3>
-                    Grievances & Support
-                </h3>
-
-                <p>
-                    Raise an issue and track its
-                    resolution.
-                </p>
-
+                <h3>Grievances & Support</h3>
+                <p>Raise an issue and track its resolution.</p>
             </div>
-
-
-            <button
-                class="primary-btn"
-                onclick="openGrievanceForm()"
-            >
-                + Raise Grievance
-            </button>
-
+            <button class="primary-btn" onclick="openGrievanceForm()">+ Raise Grievance</button>
         </div>
-
-
-        <div class="stats-grid">
-
-            ${stat(
-                "!",
-                "Open",
-                "3",
-                "1 new"
-            )}
-
-            ${stat(
-                "◷",
-                "Under Review",
-                "2",
-                "Being processed"
-            )}
-
-            ${stat(
-                "✓",
-                "Resolved",
-                "12",
-                "This month"
-            )}
-
-            ${stat(
-                "⌁",
-                "Average Time",
-                "3.2 days",
-                "Resolution time"
-            )}
-
-        </div>
-
 
         <div class="card">
-
             <div class="card-header">
-
-                <h3>
-                    Recent Grievances
-                </h3>
-
-                <span>
-                    Last 30 days
-                </span>
-
+                <h3>Recent Grievances</h3>
+                <span>All records</span>
             </div>
-
-
-            ${grievances.map(
-                g => `
-
-                <div
-                    style="
-                        padding:15px 0;
-                        border-bottom:
-                        1px solid #edf1ee;
-                        display:flex;
-                        justify-content:
-                        space-between;
-                        gap:10px;
-                        align-items:center
-                    "
-                >
-
-                    <div>
-
-                        <strong
-                            style="font-size:12px"
-                        >
-                            ${g[0]} · ${g[1]}
-                        </strong>
-
-                        <div
-                            style="
-                                font-size:10px;
-                                color:#6b7a70;
-                                margin-top:5px
-                            "
-                        >
-                            ${g[2]}
-                        </div>
-
-                    </div>
-
-
-                    <div>
-
-                        ${statusBadge(g[3])}
-
-                        <button
-                            class="link-btn"
-                            onclick="
-                                openGrievance(
-                                    '${g[0]}'
-                                )
-                            "
-                            style="
-                                margin-left:8px
-                            "
-                        >
-                            View
-                        </button>
-
-                    </div>
-
-                </div>
-
-            `).join("")}
-
+            <div id="grievanceList">${grievanceListMarkup(grievanceData)}</div>
         </div>
-
     `;
-
 }
 
-
+function grievanceListMarkup(rows) {
+    if (!rows.length) {
+        return `<div class="empty">No grievances yet.</div>`;
+    }
+    return rows.map(g => `
+        <div style="padding:15px 0;border-bottom:1px solid #edf1ee;display:flex;justify-content:space-between;gap:10px;align-items:center">
+            <div>
+                <strong style="font-size:12px">${g.grievance_number} · ${g.subject}</strong>
+                <div style="font-size:10px;color:#6b7a70;margin-top:5px">Case #${g.case_id}</div>
+            </div>
+            <div>${statusBadge(humanizeStatus(g.status))}</div>
+        </div>
+    `).join("");
+}
 /* =====================================================
    MAP
 ===================================================== */
@@ -2764,288 +2460,89 @@ function searchMap(query) {
 ===================================================== */
 
 function projectsPage() {
-
     return `
-
         <div class="page-intro">
-
             <div>
-
-                <h3>
-                    Projects
-                </h3>
-
-                <p>
-                    Monitor acquisition progress
-                    project by project.
-                </p>
-
+                <h3>Projects</h3>
+                <p>Monitor acquisition progress project by project.</p>
             </div>
-
-
-            <button
-                class="primary-btn"
-                onclick="openProjectForm()"
-            >
-                + Add Project
-            </button>
-
+            <button class="primary-btn" onclick="openProjectForm()">+ Add Project</button>
         </div>
-
 
         <div class="grid-2">
-
-
             <div class="card">
-
-                <div class="card-header">
-
-                    <h3>
-                        Project Progress
-                    </h3>
-
-                </div>
-
-
-                <div class="chart-wrap">
-
-                    <canvas
-                        id="projectChart"
-                    ></canvas>
-
-                </div>
-
+                <div class="card-header"><h3>Project Progress</h3></div>
+                <div class="chart-wrap"><canvas id="projectChart"></canvas></div>
             </div>
 
-
             <div class="card">
-
-                <div class="card-header">
-
-                    <h3>
-                        Project Summary
-                    </h3>
-
-                </div>
-
-
-                ${projects.map(
-                    project => `
-
-                    <div
-                        style="
-                            padding:12px 0;
-                            border-bottom:
-                            1px solid #edf1ee
-                        "
-                    >
-
-                        <strong
-                            style="font-size:12px"
-                        >
-                            ${project.name}
-                        </strong>
-
-                        <span
-                            style="float:right"
-                        >
-                            ${project.progress}%
-                        </span>
-
-
-                        <div
-                            style="
-                                font-size:10px;
-                                color:#6b7a70;
-                                margin-top:5px
-                            "
-                        >
-                            ${project.district}
-                            ·
-                            ${project.land}
-                            land parcels
-                            ·
-                            ${project.cases}
-                            cases
-                        </div>
-
-                    </div>
-
-                `).join("")}
-
+                <div class="card-header"><h3>Project Summary</h3></div>
+                <div id="projectList">${projectListMarkup(projects)}</div>
             </div>
-
         </div>
-
     `;
-
 }
 
+function projectListMarkup(rows) {
+    if (!rows.length) {
+        return `<div class="empty">No projects yet. Click "+ Add Project" to create one.</div>`;
+    }
+    return rows.map(project => `
+        <div style="padding:12px 0;border-bottom:1px solid #edf1ee">
+            <strong style="font-size:12px">${project.name}</strong>
+            <span style="float:right">${project.progress}%</span>
+            <div style="font-size:10px;color:#6b7a70;margin-top:5px">${project.district}</div>
+        </div>
+    `).join("");
+}
 
 /* =====================================================
    USERS
 ===================================================== */
 
 function usersPage() {
-
-    const users = [
-
-        [
-            "Rajesh Kumar",
-            "Citizen",
-            "Cachar"
-        ],
-
-        [
-            "Anita Das",
-            "Citizen",
-            "Cachar"
-        ],
-
-        [
-            "Arun Sharma",
-            "Land Officer",
-            "Cachar"
-        ],
-
-        [
-            "Neha Singh",
-            "Land Officer",
-            "Hailakandi"
-        ],
-
-        [
-            "System Admin",
-            "Administrator",
-            "National"
-        ]
-
-    ];
-
-
     return `
-
         <div class="page-intro">
-
             <div>
-
-                <h3>
-                    User Management
-                </h3>
-
-                <p>
-                    Manage citizens, officers
-                    and administrators.
-                </p>
-
+                <h3>User Management</h3>
+                <p>Manage citizens, officers and administrators.</p>
             </div>
-
-
-            <button
-                class="primary-btn"
-                onclick="openUserForm()"
-            >
-                + Add User
-            </button>
-
+            <button class="primary-btn" onclick="openUserForm()">+ Add User</button>
         </div>
-
 
         <div class="card">
-
             <div class="table-tools">
-
-                <input
-                    class="search"
-                    placeholder="Search users..."
-                >
-
+                <input class="search" placeholder="Search users...">
             </div>
-
-
-            <div class="table-wrap">
-
-                <table>
-
-                    <thead>
-
-                        <tr>
-
-                            <th>Name</th>
-
-                            <th>Role</th>
-
-                            <th>District</th>
-
-                            <th>Status</th>
-
-                            <th>Action</th>
-
-                        </tr>
-
-                    </thead>
-
-
-                    <tbody>
-
-                        ${users.map(
-                            user => `
-
-                            <tr>
-
-                                <td>
-                                    <strong>
-                                        ${user[0]}
-                                    </strong>
-                                </td>
-
-                                <td>
-                                    ${user[1]}
-                                </td>
-
-                                <td>
-                                    ${user[2]}
-                                </td>
-
-                                <td>
-
-                                    <span
-                                        class="badge green"
-                                    >
-                                        Active
-                                    </span>
-
-                                </td>
-
-                                <td>
-
-                                    <button
-                                        class="link-btn"
-                                        onclick="
-                                            alert(
-                                                'User profile opened.'
-                                            )
-                                        "
-                                    >
-                                        Manage
-                                    </button>
-
-                                </td>
-
-                            </tr>
-
-                        `).join("")}
-
-                    </tbody>
-
-                </table>
-
-            </div>
-
+            <div id="userTable">${userTableMarkup(usersData)}</div>
         </div>
-
     `;
+}
 
+function userTableMarkup(rows) {
+    if (!rows.length) {
+        return `<div class="empty">No users found.</div>`;
+    }
+    return `
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Name</th><th>Role</th><th>District</th><th>Status</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                    ${rows.map(user => `
+                        <tr>
+                            <td><strong>${user.name}</strong></td>
+                            <td>${humanizeStatus(user.role)}</td>
+                            <td>${user.district || "—"}</td>
+                            <td><span class="badge ${user.account_status === 'active' ? 'green' : 'gray'}">${humanizeStatus(user.account_status)}</span></td>
+                            <td><button class="link-btn" onclick="alert('User profile opened.')">Manage</button></td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
 }
 
 
@@ -3960,228 +3457,320 @@ async function submitLandForm() {
         errorBox.classList.remove("hidden");
     }
 }
+async function loadCases() {
+    try {
+        const data = await apiRequest("/api/cases");
+        caseData = data.cases.map(row => ({
+            id: row.case_number,
+            case_id: row.case_id,
+            survey: `Land #${row.land_id}`,
+            owner: "—",
+            project: `Project #${row.project_id}`,
+            status: humanizeStatus(row.status),
+            date: row.application_date
+                ? new Date(row.application_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+                : "—"
+        }));
+    } catch (err) {
+        console.error("Failed to load cases:", err.message);
+        caseData = [];
+    }
+    const container = document.getElementById("caseTable");
+    if (container) container.innerHTML = caseTable(caseData);
+}
+
+async function loadProjects() {
+    try {
+        const data = await apiRequest("/api/projects");
+        projects = data.projects.map(row => ({
+            id: row.project_id,
+            name: row.project_name,
+            district: row.district,
+            land: 0,
+            cases: 0,
+            progress: row.status === "completed" ? 100 : row.status === "ongoing" ? 50 : 0
+        }));
+    } catch (err) {
+        console.error("Failed to load projects:", err.message);
+        projects = [];
+    }
+    const list = document.getElementById("projectList");
+    if (list) list.innerHTML = projectListMarkup(projects);
+    initializeProjectChart();
+}
+
+async function loadUsers() {
+    try {
+        const data = await apiRequest("/api/users");
+        usersData = data.users;
+    } catch (err) {
+        console.error("Failed to load users:", err.message);
+        usersData = [];
+    }
+    const container = document.getElementById("userTable");
+    if (container) container.innerHTML = userTableMarkup(usersData);
+}
+
+async function loadGrievances() {
+    try {
+        const data = await apiRequest("/api/grievances");
+        grievanceData = data.grievances;
+    } catch (err) {
+        console.error("Failed to load grievances:", err.message);
+        grievanceData = [];
+    }
+    const container = document.getElementById("grievanceList");
+    if (container) container.innerHTML = grievanceListMarkup(grievanceData);
+}
 
 /* =====================================================
    CASE FORM
 ===================================================== */
 
 function openCaseForm() {
-
     openModal(`
-
-        <h2>
-            Create Acquisition Case
-        </h2>
-
-
+        <h2>Create Acquisition Case</h2>
         <div class="form-grid">
-
-            ${formField(
-                "Survey Number",
-                ""
-            )}
-
-            ${formField(
-                "Owner",
-                ""
-            )}
-
-            ${formField(
-                "Project",
-                ""
-            )}
-
-            ${formField(
-                "Status",
-                "Land Verification"
-            )}
-
+            ${formField("Land ID (numeric)", "", "f_case_land")}
+            ${formField("Project ID (numeric)", "", "f_case_project")}
+            ${formField("Application Date (YYYY-MM-DD)", "", "f_case_date")}
+            ${formField("Status", "application submitted", "f_case_status")}
         </div>
-
-
-        <button
-            class="primary-btn"
-            style="margin-top:18px"
-            onclick="
-                closeModal();
-                alert(
-                    'Acquisition case created.'
-                )
-            "
-        >
-            Create Case
-        </button>
-
+        <div id="caseFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
+        <button class="primary-btn" style="margin-top:18px" onclick="submitCaseForm()">Create Case</button>
     `);
-
 }
 
+async function submitCaseForm() {
+    const errorBox = document.getElementById("caseFormError");
+    const payload = {
+        land_id: Number(document.getElementById("f_case_land").value),
+        project_id: Number(document.getElementById("f_case_project").value),
+        application_date: document.getElementById("f_case_date").value.trim(),
+        status: document.getElementById("f_case_status").value.trim() || undefined
+    };
 
-/* =====================================================
-   COMPENSATION FORM
-===================================================== */
+    if (!payload.land_id || !payload.project_id || !payload.application_date) {
+        errorBox.textContent = "Land ID, Project ID and Application Date are required, and must reference existing records.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/cases", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        await loadCases();
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
+}
 
 function openCompForm() {
-
     openModal(`
-
-        <h2>
-            Compensation Record
-        </h2>
-
-
+        <h2>Compensation Record</h2>
         <div class="form-grid">
-
-            ${formField(
-                "Case ID",
-                "ACQ-2402"
-            )}
-
-            ${formField(
-                "Payment Reference",
-                ""
-            )}
-
-            ${formField(
-                "Amount",
-                ""
-            )}
-
-            ${formField(
-                "Payment Date",
-                ""
-            )}
-
+            ${formField("Case ID (numeric)", "", "f_comp_case")}
+            ${formField("Payment Reference", "", "f_comp_ref")}
+            ${formField("Approved Amount", "", "f_comp_amount")}
+            ${formField("Payment Date (YYYY-MM-DD)", "", "f_comp_date")}
         </div>
-
-
-        <button
-            class="primary-btn"
-            style="margin-top:18px"
-            onclick="
-                closeModal();
-                alert(
-                    'Compensation record saved.'
-                )
-            "
-        >
-            Save Payment
-        </button>
-
+        <div id="compFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
+        <button class="primary-btn" style="margin-top:18px" onclick="submitCompForm()">Save Payment</button>
     `);
-
 }
 
+async function submitCompForm() {
+    const errorBox = document.getElementById("compFormError");
+    const payload = {
+        case_id: Number(document.getElementById("f_comp_case").value),
+        payment_reference: document.getElementById("f_comp_ref").value.trim() || undefined,
+        approved_amount: Number(document.getElementById("f_comp_amount").value) || undefined,
+        payment_date: document.getElementById("f_comp_date").value.trim() || undefined
+    };
 
-/* =====================================================
-   PROJECT FORM
-===================================================== */
+    if (!payload.case_id) {
+        errorBox.textContent = "Case ID is required and must reference an existing case.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/compensation", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        alert("Compensation record saved.");
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
+}
 
 function openProjectForm() {
-
     openModal(`
-
-        <h2>
-            Add Project
-        </h2>
-
-
+        <h2>Add Project</h2>
         <div class="form-grid">
-
-            ${formField(
-                "Project Name",
-                ""
-            )}
-
-            ${formField(
-                "District",
-                ""
-            )}
-
-            ${formField(
-                "Land Parcels",
-                ""
-            )}
-
-            ${formField(
-                "Target Date",
-                ""
-            )}
-
+            ${formField("Project Name", "", "f_proj_name")}
+            ${formField("District", "", "f_proj_district")}
+            ${formField("State", "", "f_proj_state")}
+            ${formField("Target Date (YYYY-MM-DD)", "", "f_proj_date")}
         </div>
-
-
-        <button
-            class="primary-btn"
-            style="margin-top:18px"
-            onclick="
-                closeModal();
-                alert(
-                    'Project created.'
-                )
-            "
-        >
-            Create Project
-        </button>
-
+        <div id="projectFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
+        <button class="primary-btn" style="margin-top:18px" onclick="submitProjectForm()">Create Project</button>
     `);
-
 }
 
+async function submitProjectForm() {
+    const errorBox = document.getElementById("projectFormError");
+    const payload = {
+        project_name: document.getElementById("f_proj_name").value.trim(),
+        district: document.getElementById("f_proj_district").value.trim(),
+        state: document.getElementById("f_proj_state").value.trim(),
+        target_date: document.getElementById("f_proj_date").value.trim() || undefined
+    };
 
-/* =====================================================
-   USER FORM
-===================================================== */
+    if (!payload.project_name || !payload.district || !payload.state) {
+        errorBox.textContent = "Project Name, District and State are required.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/projects", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        await loadProjects();
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
+}
 
 function openUserForm() {
-
     openModal(`
-
-        <h2>
-            Add User
-        </h2>
-
-
+        <h2>Add User</h2>
         <div class="form-grid">
-
-            ${formField(
-                "Full Name",
-                ""
-            )}
-
-            ${formField(
-                "Email",
-                ""
-            )}
-
-            ${formField(
-                "Role",
-                "Citizen"
-            )}
-
-            ${formField(
-                "District",
-                ""
-            )}
-
+            ${formField("Username", "", "f_user_username")}
+            ${formField("Full Name", "", "f_user_name")}
+            ${formField("Email", "", "f_user_email")}
+            ${formField("Password", "", "f_user_password")}
+            ${formField("Role (citizen/officer/admin)", "citizen", "f_user_role")}
+            ${formField("District", "", "f_user_district")}
         </div>
-
-
-        <button
-            class="primary-btn"
-            style="margin-top:18px"
-            onclick="
-                closeModal();
-                alert(
-                    'User created.'
-                )
-            "
-        >
-            Create User
-        </button>
-
+        <div id="userFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
+        <button class="primary-btn" style="margin-top:18px" onclick="submitUserForm()">Create User</button>
     `);
+}
 
+async function submitUserForm() {
+    const errorBox = document.getElementById("userFormError");
+    const payload = {
+        username: document.getElementById("f_user_username").value.trim(),
+        name: document.getElementById("f_user_name").value.trim(),
+        email: document.getElementById("f_user_email").value.trim(),
+        password: document.getElementById("f_user_password").value,
+        role: document.getElementById("f_user_role").value.trim() || undefined,
+        district: document.getElementById("f_user_district").value.trim() || undefined
+    };
+
+    if (!payload.username || !payload.name || !payload.email || !payload.password) {
+        errorBox.textContent = "Username, Name, Email and Password are required.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/users", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        await loadUsers();
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
+}
+
+function openGrievanceForm() {
+    openModal(`
+        <h2>Raise a Grievance</h2>
+        <p>Submit an issue related to land, documents, acquisition or compensation.</p>
+        <div class="form-grid">
+            ${formField("Case ID (numeric)", "", "f_griev_case")}
+            ${formField("Category (land/document/acquisition/compensation/other)", "compensation", "f_griev_category")}
+            <div class="form-group full-col">
+                <label>Subject</label>
+                <input id="f_griev_subject" placeholder="Enter subject">
+            </div>
+            <div class="form-group full-col">
+                <label>Description</label>
+                <textarea id="f_griev_description" placeholder="Describe the issue..."></textarea>
+            </div>
+        </div>
+        <div id="grievanceFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
+        <button class="primary-btn" style="margin-top:18px" onclick="submitGrievanceForm()">Submit Grievance</button>
+    `);
+}
+
+async function submitGrievanceForm() {
+    const errorBox = document.getElementById("grievanceFormError");
+    const payload = {
+        case_id: Number(document.getElementById("f_griev_case").value),
+        citizen_id: state.userId,
+        category: document.getElementById("f_griev_category").value.trim(),
+        subject: document.getElementById("f_griev_subject").value.trim(),
+        description: document.getElementById("f_griev_description").value.trim()
+    };
+
+    if (!payload.case_id || !payload.category || !payload.subject || !payload.description) {
+        errorBox.textContent = "Case ID, Category, Subject and Description are required.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/grievances", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        await loadGrievances();
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
+}
+
+function openDocumentForm() {
+    openModal(`
+        <h2>Upload Document</h2>
+        <p>Select document type and enter file details.</p>
+        <div class="form-grid">
+            ${formField("Document Type", "land record", "f_doc_type")}
+            ${formField("Case ID (numeric)", "", "f_doc_case")}
+            ${formField("File Name", "", "f_doc_filename")}
+        </div>
+        <div id="documentFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
+        <button class="primary-btn" style="margin-top:18px" onclick="submitDocumentForm()">Upload</button>
+    `);
+}
+
+async function submitDocumentForm() {
+    const errorBox = document.getElementById("documentFormError");
+    const payload = {
+        case_id: Number(document.getElementById("f_doc_case").value),
+        uploaded_by: state.userId,
+        document_type: document.getElementById("f_doc_type").value.trim(),
+        file_name: document.getElementById("f_doc_filename").value.trim()
+    };
+
+    if (!payload.case_id || !payload.document_type || !payload.file_name) {
+        errorBox.textContent = "Case ID, Document Type and File Name are required.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/documents", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        alert("Document uploaded successfully.");
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
 }
 
 
