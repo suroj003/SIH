@@ -34,63 +34,57 @@ const state = {
     ]
 
 };
+/* ================= REAL API LAYER ================= */
 
+let authToken = sessionStorage.getItem("ls_token") || null;
+
+async function apiRequest(path, options = {}) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
+    const res = await fetch(path, { ...options, headers });
+
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* empty/non-JSON body */ }
+
+    if (!res.ok) {
+        throw new Error((body && body.message) || `Request failed (${res.status})`);
+    }
+    return body;
+}
+
+function humanizeStatus(value) {
+    return String(value)
+        .split("_")
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+}
 
 /* ================= DEMO LAND DATA ================= */
 
-const landData = [
+let landData = [];
 
-    {
-        id: "LD-1024",
-        survey: "125/4",
-        owner: "Rajesh Kumar",
-        area: "2.50 acres",
-        village: "Tarapur",
-        project: "NH Expansion",
-        status: "Under Review"
-    },
-
-    {
-        id: "LD-1025",
-        survey: "128/2",
-        owner: "Anita Das",
-        area: "1.20 acres",
-        village: "Meherpur",
-        project: "NH Expansion",
-        status: "Compensation"
-    },
-
-    {
-        id: "LD-1026",
-        survey: "131/7",
-        owner: "Mohan Lal",
-        area: "3.10 acres",
-        village: "Silchar",
-        project: "Rail Corridor",
-        status: "Acquired"
-    },
-
-    {
-        id: "LD-1027",
-        survey: "142/1",
-        owner: "Priya Sharma",
-        area: "1.85 acres",
-        village: "Udharbond",
-        project: "Ring Road",
-        status: "Verification"
-    },
-
-    {
-        id: "LD-1028",
-        survey: "155/9",
-        owner: "Suresh Roy",
-        area: "4.20 acres",
-        village: "Sonai",
-        project: "Ring Road",
-        status: "Pending"
+async function loadLands() {
+    try {
+        const data = await apiRequest("/api/lands");
+        landData = data.lands.map(row => ({
+            id: row.land_code,
+            land_id: row.land_id,
+            survey: row.survey_number,
+            owner: `Owner #${row.owner_id}`,
+            area: `${row.area_acres} acres`,
+            village: row.village,
+            project: row.project_id ? `Project #${row.project_id}` : "—",
+            status: humanizeStatus(row.status)
+        }));
+    } catch (err) {
+        console.error("Failed to load land records:", err.message);
+        landData = [];
     }
 
-];
+    const container = document.getElementById("landTable");
+    if (container) container.innerHTML = landTable(landData);
+}
 
 
 /* ================= ACQUISITION CASES ================= */
@@ -171,73 +165,59 @@ const projects = [
    LOGIN
 ===================================================== */
 
-function login() {
+async function login() {
 
-    const role =
-        document.getElementById("role").value;
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+    const errorBox = document.getElementById("loginError");
 
-
-    state.role = role;
-
-
-    if (role === "citizen") {
-
-        state.user = "Citizen";
-
+    if (errorBox) {
+        errorBox.textContent = "";
+        errorBox.classList.add("hidden");
     }
 
-    else if (role === "officer") {
+    try {
+        const data = await apiRequest("/api/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ username, password })
+        });
 
-        state.user = "Land Officer";
+        authToken = data.token;
+        sessionStorage.setItem("ls_token", authToken);
 
+        state.role = data.role;
+        state.user = data.name;
+        state.userId = data.user_id;
+
+        document.getElementById("loginScreen").classList.add("hidden");
+        document.getElementById("app").classList.remove("hidden");
+
+        buildNavigation();
+        await loadLands();
+        showPage("dashboard");
+
+    } catch (err) {
+        const message = err.message || "Login failed. Check your username and password.";
+        if (errorBox) {
+            errorBox.textContent = message;
+            errorBox.classList.remove("hidden");
+        } else {
+            alert(message);
+        }
     }
-
-    else {
-
-        state.user = "Administrator";
-
-    }
-
-
-    document
-        .getElementById("loginScreen")
-        .classList
-        .add("hidden");
-
-
-    document
-        .getElementById("app")
-        .classList
-        .remove("hidden");
-
-
-    buildNavigation();
-
-
-    showPage("dashboard");
-
 }
-
 
 /* =====================================================
    LOGOUT
 ===================================================== */
 
 function logout() {
+    authToken = null;
+    sessionStorage.removeItem("ls_token");
 
-    document
-        .getElementById("app")
-        .classList
-        .add("hidden");
-
-
-    document
-        .getElementById("loginScreen")
-        .classList
-        .remove("hidden");
-
+    document.getElementById("app").classList.add("hidden");
+    document.getElementById("loginScreen").classList.remove("hidden");
 }
-
 
 /* =====================================================
    MOBILE SIDEBAR
@@ -3769,24 +3749,13 @@ function openDocument(name) {
    FORMS
 ===================================================== */
 
-function formField(label, value) {
-
+function formField(label, value, id) {
     return `
-
         <div class="form-group">
-
-            <label>
-                ${label}
-            </label>
-
-            <input
-                value="${value}"
-            >
-
+            <label>${label}</label>
+            <input id="${id || ""}" value="${value}">
         </div>
-
     `;
-
 }
 
 
@@ -3944,70 +3913,53 @@ function openDocumentForm() {
 ===================================================== */
 
 function openLandForm() {
-
     openModal(`
-
-        <h2>
-            Add Land Record
-        </h2>
-
-        <p>
-            Create a new digital land record.
-        </p>
-
+        <h2>Add Land Record</h2>
+        <p>Create a new digital land record.</p>
 
         <div class="form-grid">
-
-            ${formField(
-                "Survey Number",
-                ""
-            )}
-
-            ${formField(
-                "Owner Name",
-                ""
-            )}
-
-            ${formField(
-                "Area",
-                ""
-            )}
-
-            ${formField(
-                "Village",
-                ""
-            )}
-
-            ${formField(
-                "Project",
-                ""
-            )}
-
-            ${formField(
-                "Status",
-                "Pending"
-            )}
-
+            ${formField("Survey Number", "", "f_survey")}
+            ${formField("Owner ID (numeric)", state.userId || "", "f_owner")}
+            ${formField("Area (acres)", "", "f_area")}
+            ${formField("Village", "", "f_village")}
+            ${formField("District", "", "f_district")}
+            ${formField("State", "", "f_state")}
         </div>
 
+        <div id="landFormError" class="hidden" style="color:#c0392b;margin-top:10px;"></div>
 
-        <button
-            class="primary-btn"
-            style="margin-top:18px"
-            onclick="
-                closeModal();
-                alert(
-                    'Land record created.'
-                )
-            "
-        >
+        <button class="primary-btn" style="margin-top:18px" onclick="submitLandForm()">
             Save Land Record
         </button>
-
     `);
-
 }
 
+async function submitLandForm() {
+    const errorBox = document.getElementById("landFormError");
+    const payload = {
+        survey_number: document.getElementById("f_survey").value.trim(),
+        owner_id: Number(document.getElementById("f_owner").value),
+        area_acres: Number(document.getElementById("f_area").value),
+        village: document.getElementById("f_village").value.trim(),
+        district: document.getElementById("f_district").value.trim(),
+        state: document.getElementById("f_state").value.trim()
+    };
+
+    if (!payload.survey_number || !payload.owner_id || !payload.area_acres || !payload.village || !payload.district || !payload.state) {
+        errorBox.textContent = "All fields are required, and Owner ID must reference an existing user.";
+        errorBox.classList.remove("hidden");
+        return;
+    }
+
+    try {
+        await apiRequest("/api/lands", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+        await loadLands();
+    } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.remove("hidden");
+    }
+}
 
 /* =====================================================
    CASE FORM

@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
@@ -10,34 +11,22 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get("/", (req, res) => {
+app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/api/health", (req, res) => {
     res.send("LandSetu API is running");
 });
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
-    // Fail loudly at boot instead of letting jwt.sign()/verify() silently
-    // misbehave later with an undefined secret.
     console.error("FATAL: JWT_SECRET is not set in the environment.");
     process.exit(1);
 }
 
-// =====================================================
-// ASYNC WRAPPER + GLOBAL ERROR HANDLER
-// =====================================================
-// Wrapping every async route means a thrown error (or a rejected
-// promise from something we forgot to await) is always forwarded to
-// Express's error handler instead of becoming an unhandled rejection.
 function asyncHandler(fn) {
     return (req, res, next) => fn(req, res, next).catch(next);
 }
 
-// =====================================================
-// AUTH MIDDLEWARE
-// =====================================================
-// Verifies the Bearer token issued by /api/auth/login and attaches
-// { user_id, role } to req.user. Previously nothing checked this at
-// all, so every POST/PATCH route was reachable without logging in.
 function authenticateToken(req, res, next) {
     const authHeader = req.headers["authorization"] || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -50,12 +39,11 @@ function authenticateToken(req, res, next) {
         if (err) {
             return res.status(401).json({ success: false, message: "Invalid or expired token" });
         }
-        req.user = payload; // { user_id, role }
+        req.user = payload;
         next();
     });
 }
 
-// Optional helper if you want to restrict certain routes to specific roles later:
 function requireRole(...roles) {
     return (req, res, next) => {
         if (!req.user || !roles.includes(req.user.role)) {
@@ -64,10 +52,6 @@ function requireRole(...roles) {
         next();
     };
 }
-
-// =====================================================
-// STATUS / TYPE MAPS  (frontend label <-> DB enum value)
-// =====================================================
 
 const LAND_STATUS_MAP = {
     "pending": "pending",
@@ -101,19 +85,13 @@ const DOCUMENT_TYPE_MAP = {
     "other": "other"
 };
 
-// Accepts either the frontend label ("Under Review") or the
-// raw enum value ("under_review") already. Returns the enum
-// value, or null if it doesn't match anything in the map.
 function resolveEnum(map, input) {
     if (!input) return null;
     const key = String(input).trim().toLowerCase();
-    if (Object.values(map).includes(key)) return key; // already an enum value
+    if (Object.values(map).includes(key)) return key;
     return map[key] || null;
 }
 
-// Small helper for required-field checks that treats 0 as a valid
-// value (the old `!field` checks rejected legitimate 0 values for
-// numeric fields like area_acres).
 function isMissing(value) {
     return value === undefined || value === null || value === "";
 }
@@ -122,7 +100,6 @@ function generateCode(prefix) {
     return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
 }
 
-// ---------------- LOGIN ----------------
 app.post("/api/auth/login", asyncHandler(async (req, res) => {
     const { username, password } = req.body;
 
@@ -155,13 +132,13 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
     res.json({
         success: true,
         token,
+        user_id: user.user_id,
         username: user.username,
         name: user.name,
         role: user.role
     });
 }));
 
-// ---------------- DASHBOARD ----------------
 app.get("/api/dashboard/stats", authenticateToken, asyncHandler(async (req, res) => {
     const [[land]] = await pool.query("SELECT COUNT(*) AS total FROM land");
     const [[cases]] = await pool.query("SELECT COUNT(*) AS total FROM acquisition_cases");
@@ -170,7 +147,6 @@ app.get("/api/dashboard/stats", authenticateToken, asyncHandler(async (req, res)
     res.json({ success: true, totalLand: land.total, totalCases: cases.total, openGrievances: grievances.total });
 }));
 
-// ---------------- PROJECTS ----------------
 app.get("/api/projects", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM projects ORDER BY created_at DESC");
     res.json({ success: true, projects: rows });
@@ -197,7 +173,6 @@ app.post("/api/projects", authenticateToken, asyncHandler(async (req, res) => {
     res.json({ success: true, project_id: result.insertId });
 }));
 
-// ---------------- LAND ----------------
 app.get("/api/lands", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM land ORDER BY created_at DESC");
     res.json({ success: true, lands: rows });
@@ -247,11 +222,10 @@ app.post("/api/lands", authenticateToken, asyncHandler(async (req, res) => {
         if (error.code === "ER_NO_REFERENCED_ROW" || error.code === "ER_NO_REFERENCED_ROW_2") {
             return res.status(400).json({ success: false, message: "owner_id or project_id does not reference an existing record" });
         }
-        throw error; // handled by global error handler
+        throw error;
     }
 }));
 
-// ---------------- CASES ----------------
 app.get("/api/cases", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM acquisition_cases ORDER BY created_at DESC");
     res.json({ success: true, cases: rows });
@@ -305,11 +279,6 @@ app.post("/api/cases", authenticateToken, asyncHandler(async (req, res) => {
     }
 }));
 
-// PATCH status + write to case_status_history
-//
-// FIXED: `changed_by` is no longer trusted from the request body — it's
-// taken from the authenticated JWT (req.user.user_id) instead, now that
-// authenticateToken runs on this route.
 app.patch("/api/cases/:id/status", authenticateToken, asyncHandler(async (req, res) => {
     const { status, remarks } = req.body;
     const changed_by = req.user.user_id;
@@ -319,10 +288,6 @@ app.patch("/api/cases/:id/status", authenticateToken, asyncHandler(async (req, r
         return res.status(400).json({ success: false, message: `Invalid status: ${status}` });
     }
 
-    // FIXED: getConnection() is now inside the try block, so a failure
-    // to acquire a connection (pool exhausted, DB unreachable) is caught
-    // and turned into a clean 500 instead of an unhandled rejection /
-    // crash when `finally` tried to release an undefined connection.
     let connection;
     try {
         connection = await pool.getConnection();
@@ -364,7 +329,6 @@ app.patch("/api/cases/:id/status", authenticateToken, asyncHandler(async (req, r
     }
 }));
 
-// ---------------- COMPENSATION ----------------
 app.get("/api/compensation/:caseId", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
         "SELECT * FROM compensation WHERE case_id = ?",
@@ -378,9 +342,6 @@ app.get("/api/compensation/:caseId", authenticateToken, asyncHandler(async (req,
     res.json({ success: true, compensation: rows[0] });
 }));
 
-// case_id is UNIQUE in the schema, so this upserts: a second call for the
-// same case updates the existing row (e.g. approved -> paid) rather than
-// throwing a duplicate-key error.
 app.post("/api/compensation", authenticateToken, asyncHandler(async (req, res) => {
     const { case_id, assessed_amount, approved_amount, paid_amount, payment_reference, payment_date, payment_status, remarks } = req.body;
 
@@ -416,7 +377,6 @@ app.post("/api/compensation", authenticateToken, asyncHandler(async (req, res) =
     res.json({ success: true, compensation_id: result.insertId || undefined, updated: result.insertId === 0 });
 }));
 
-// ---------------- GRIEVANCES ----------------
 app.get("/api/grievances", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM grievances ORDER BY created_at DESC");
     res.json({ success: true, grievances: rows });
@@ -448,7 +408,6 @@ app.post("/api/grievances", authenticateToken, asyncHandler(async (req, res) => 
     res.json({ success: true, grievance_id: result.insertId, grievance_number });
 }));
 
-// ---------------- DOCUMENTS ----------------
 app.get("/api/documents/:caseId", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
         "SELECT * FROM documents WHERE case_id = ?",
@@ -479,9 +438,6 @@ app.post("/api/documents", authenticateToken, asyncHandler(async (req, res) => {
     res.json({ success: true, document_id: result.insertId });
 }));
 
-// ---------------- USERS ----------------
-// Restricted to admins: previously any unauthenticated caller could
-// create a user (including an admin/officer account) via this route.
 app.get("/api/users", authenticateToken, requireRole("admin", "officer"), asyncHandler(async (req, res) => {
     const [rows] = await pool.query(
         "SELECT user_id, username, name, email, phone, role, district, account_status FROM users ORDER BY created_at DESC"
@@ -490,10 +446,6 @@ app.get("/api/users", authenticateToken, requireRole("admin", "officer"), asyncH
 }));
 
 app.post("/api/users", asyncHandler(async (req, res) => {
-    // Left unauthenticated intentionally to support citizen self-registration.
-    // If admin/officer accounts should only be creatable by an existing admin,
-    // add `authenticateToken, requireRole("admin")` here and reject a
-    // client-supplied `role` of anything other than "citizen" otherwise.
     const { username, name, email, password, phone, role, district } = req.body;
 
     if (isMissing(username) || isMissing(name) || isMissing(email) || isMissing(password)) {
@@ -523,7 +475,6 @@ app.post("/api/users", asyncHandler(async (req, res) => {
     }
 }));
 
-// ---------------- NOTIFICATIONS ----------------
 app.get("/api/notifications", authenticateToken, asyncHandler(async (req, res) => {
     const [rows] = await pool.query("SELECT * FROM notifications ORDER BY created_at DESC");
     res.json({ success: true, notifications: rows });
@@ -545,18 +496,15 @@ app.post("/api/notifications", authenticateToken, requireRole("admin", "officer"
     res.json({ success: true, notification_id: result.insertId });
 }));
 
-// ---------------- 404 + GLOBAL ERROR HANDLER ----------------
 app.use((req, res) => {
     res.status(404).json({ success: false, message: "Route not found" });
 });
 
-// Any error thrown/rejected inside an asyncHandler-wrapped route lands here.
 app.use((error, req, res, next) => {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
 });
 
-// ---------------- START ----------------
 const PORT = Number(process.env.PORT || 5000);
 
 const startServer = (port) => {
