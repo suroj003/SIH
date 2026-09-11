@@ -504,65 +504,7 @@ app.use((error, req, res, next) => {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
 });
-async function createDefaultUsers() {
-    const defaultUsers = [
-        {
-            username: "citizen",
-            name: "Demo Citizen",
-            email: "citizen@landsetu.com",
-            password: "Citizen@123",
-            phone: "9000000001",
-            role: "citizen",
-            district: "Cachar"
-        },
-        {
-            username: "officer",
-            name: "Demo Officer",
-            email: "officer@landsetu.com",
-            password: "Officer@123",
-            phone: "9000000002",
-            role: "officer",
-            district: "Cachar"
-        },
-        {
-            username: "admin",
-            name: "System Administrator",
-            email: "admin@landsetu.com",
-            password: "Admin@123",
-            phone: "9000000003",
-            role: "admin",
-            district: "Cachar"
-        }
-    ];
 
-    for (const user of defaultUsers) {
-        const [existing] = await pool.query(
-            "SELECT user_id FROM users WHERE username = ?",
-            [user.username]
-        );
-
-        if (existing.length === 0) {
-            const password_hash = await bcrypt.hash(user.password, 10);
-
-            await pool.query(
-                `INSERT INTO users
-                (username, name, email, password_hash, phone, role, district)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    user.username,
-                    user.name,
-                    user.email,
-                    password_hash,
-                    user.phone,
-                    user.role,
-                    user.district
-                ]
-            );
-
-            console.log(`Default ${user.role} user created: ${user.username}`);
-        }
-    }
-}
 const PORT = Number(process.env.PORT || 5000);
 
 const startServer = (port) => {
@@ -581,62 +523,4 @@ const startServer = (port) => {
     });
 };
 
-async function createDefaultUsers() {
-    const defaultUsers = [
-        {
-            username: "citizen",
-            name: "Demo Citizen",
-            email: "citizen@landsetu.com",
-            password: "Citizen@123",
-            phone: "9000000001",
-            role: "citizen",
-            district: "Cachar"
-        },
-        {
-            username: "officer",
-            name: "Demo Officer",
-            email: "officer@landsetu.com",
-            password: "Officer@123",
-            phone: "9000000002",
-            role: "officer",
-            district: "Cachar"
-        },
-        {
-            username: "admin",
-            name: "System Administrator",
-            email: "admin@landsetu.com",
-            password: "Admin@123",
-            phone: "9000000003",
-            role: "admin",
-            district: "Cachar"
-        }
-    ];
-
-    for (const user of defaultUsers) {
-        const [existing] = await pool.query(
-            "SELECT user_id FROM users WHERE username = ?",
-            [user.username]
-        );
-
-        if (existing.length === 0) {
-            const password_hash = await bcrypt.hash(user.password, 10);
-
-            await pool.query(
-                `INSERT INTO users
-                (username, name, email, password_hash, phone, role, district)
-                VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    user.username,
-                    user.name,
-                    user.email,
-                    password_hash,
-                    user.phone,
-                    user.role,
-                    user.district
-                ]
-            );
-
-            console.log(`Default ${user.role} user created: ${user.username}`);
-        }
-    }
-}
+startServer(PORT);
