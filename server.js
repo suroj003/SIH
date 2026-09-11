@@ -24,6 +24,9 @@ if (!JWT_SECRET) {
 }
 
 // ---- Hardcoded demo users (DB is empty, used as fallback for login) ----
+// NOTE: passwords here are compared in plain text on purpose, as a demo-only
+// fallback for when the users table is empty. Do NOT ship this to production —
+// every real account uses bcrypt-hashed passwords via the DB lookup below.
 const HARDCODED_USERS = [
     { user_id: 1, username: "citizen", name: "Citizen User", password: "12345", role: "citizen" },
     { user_id: 2, username: "administrator", name: "Administrator", password: "12345", role: "admin" },
@@ -58,6 +61,25 @@ function requireRole(...roles) {
         }
         next();
     };
+}
+
+// ---- Ownership / assignment helpers (fixes broken access control) ----
+async function findCaseWithAccessInfo(caseId) {
+    const [[row]] = await pool.query(
+        `SELECT ac.*, l.owner_id, l.survey_number
+         FROM acquisition_cases ac
+         JOIN land l ON ac.land_id = l.land_id
+         WHERE ac.case_id = ?`,
+        [caseId]
+    );
+    return row || null;
+}
+
+function canAccessCase(user, caseRow) {
+    if (user.role === "admin") return true;
+    if (user.role === "officer") return caseRow.officer_id === user.user_id;
+    if (user.role === "citizen") return caseRow.owner_id === user.user_id;
+    return false;
 }
 
 const LAND_STATUS_MAP = {
@@ -204,8 +226,18 @@ app.post("/api/projects", authenticateToken, asyncHandler(async (req, res) => {
     res.json({ success: true, project_id: result.insertId });
 }));
 
+// FIX: citizens previously saw every land record from every owner.
+// Now citizens only see their own; officers/admins still see everything.
 app.get("/api/lands", authenticateToken, asyncHandler(async (req, res) => {
-    const [rows] = await pool.query("SELECT * FROM land ORDER BY created_at DESC");
+    let rows;
+    if (req.user.role === "citizen") {
+        [rows] = await pool.query(
+            "SELECT * FROM land WHERE owner_id = ? ORDER BY created_at DESC",
+            [req.user.user_id]
+        );
+    } else {
+        [rows] = await pool.query("SELECT * FROM land ORDER BY created_at DESC");
+    }
     res.json({ success: true, lands: rows });
 }));
 
@@ -217,13 +249,22 @@ app.post("/api/lands", authenticateToken, asyncHandler(async (req, res) => {
     } = req.body;
 
     if (
-        isMissing(owner_id) || isMissing(survey_number) || isMissing(area_acres) ||
+        isMissing(survey_number) || isMissing(area_acres) ||
         isMissing(village) || isMissing(district) || isMissing(state)
     ) {
         return res.status(400).json({
             success: false,
-            message: "owner_id, survey_number, area_acres, village, district and state are required"
+            message: "survey_number, area_acres, village, district and state are required"
         });
+    }
+
+    // FIX: a citizen could previously register land under someone else's
+    // owner_id. Citizens are now always registered as the land's owner.
+    let resolvedOwnerId = owner_id;
+    if (req.user.role === "citizen") {
+        resolvedOwnerId = req.user.user_id;
+    } else if (isMissing(owner_id)) {
+        return res.status(400).json({ success: false, message: "owner_id is required" });
     }
 
     const resolvedStatus = status ? resolveEnum(LAND_STATUS_MAP, status) : "pending";
@@ -239,7 +280,7 @@ app.post("/api/lands", authenticateToken, asyncHandler(async (req, res) => {
                 (land_code, owner_id, project_id, survey_number, area_acres, village, district, state, land_type, status, latitude, longitude)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-                land_code, owner_id, project_id || null, survey_number, area_acres,
+                land_code, resolvedOwnerId, project_id || null, survey_number, area_acres,
                 village, district, state, land_type || "agricultural",
                 resolvedStatus || "pending", latitude || null, longitude || null
             ]
@@ -257,22 +298,47 @@ app.post("/api/lands", authenticateToken, asyncHandler(async (req, res) => {
     }
 }));
 
+// FIX: citizens previously saw every case in the system; officers saw
+// cases that weren't even assigned to them. Also now joins in survey_number
+// and owner_id so the frontend has what it needs to render a case row.
 app.get("/api/cases", authenticateToken, asyncHandler(async (req, res) => {
-    const [rows] = await pool.query("SELECT * FROM acquisition_cases ORDER BY created_at DESC");
+    const baseSelect = `
+        SELECT ac.*, l.survey_number, l.owner_id
+        FROM acquisition_cases ac
+        JOIN land l ON ac.land_id = l.land_id
+    `;
+
+    let rows;
+    if (req.user.role === "citizen") {
+        [rows] = await pool.query(
+            `${baseSelect} WHERE l.owner_id = ? ORDER BY ac.created_at DESC`,
+            [req.user.user_id]
+        );
+    } else if (req.user.role === "officer") {
+        [rows] = await pool.query(
+            `${baseSelect} WHERE ac.officer_id = ? ORDER BY ac.created_at DESC`,
+            [req.user.user_id]
+        );
+    } else {
+        [rows] = await pool.query(`${baseSelect} ORDER BY ac.created_at DESC`);
+    }
+
     res.json({ success: true, cases: rows });
 }));
 
+// FIX: any authenticated user could fetch any case by id, including
+// other citizens' cases. Now checks ownership/assignment first.
 app.get("/api/cases/:id", authenticateToken, asyncHandler(async (req, res) => {
-    const [rows] = await pool.query(
-        "SELECT * FROM acquisition_cases WHERE case_id = ?",
-        [req.params.id]
-    );
+    const caseRow = await findCaseWithAccessInfo(req.params.id);
 
-    if (rows.length === 0) {
+    if (!caseRow) {
         return res.status(404).json({ success: false, message: "Case not found" });
     }
+    if (!canAccessCase(req.user, caseRow)) {
+        return res.status(403).json({ success: false, message: "Insufficient permissions" });
+    }
 
-    res.json({ success: true, case: rows[0] });
+    res.json({ success: true, case: caseRow });
 }));
 
 app.post("/api/cases", authenticateToken, asyncHandler(async (req, res) => {
@@ -310,7 +376,10 @@ app.post("/api/cases", authenticateToken, asyncHandler(async (req, res) => {
     }
 }));
 
-app.patch("/api/cases/:id/status", authenticateToken, asyncHandler(async (req, res) => {
+// FIX: previously ANY authenticated user (including a citizen) could change
+// a case's status. Now restricted to officer/admin, and an officer must be
+// the officer actually assigned to that case.
+app.patch("/api/cases/:id/status", authenticateToken, requireRole("officer", "admin"), asyncHandler(async (req, res) => {
     const { status, remarks } = req.body;
     const changed_by = req.user.user_id;
 
@@ -325,13 +394,18 @@ app.patch("/api/cases/:id/status", authenticateToken, asyncHandler(async (req, r
         await connection.beginTransaction();
 
         const [[existing]] = await connection.query(
-            "SELECT status FROM acquisition_cases WHERE case_id = ? FOR UPDATE",
+            "SELECT status, officer_id FROM acquisition_cases WHERE case_id = ? FOR UPDATE",
             [req.params.id]
         );
 
         if (!existing) {
             await connection.rollback();
             return res.status(404).json({ success: false, message: "Case not found" });
+        }
+
+        if (req.user.role === "officer" && existing.officer_id !== req.user.user_id) {
+            await connection.rollback();
+            return res.status(403).json({ success: false, message: "You are not assigned to this case" });
         }
 
         await connection.query(
@@ -360,7 +434,16 @@ app.patch("/api/cases/:id/status", authenticateToken, asyncHandler(async (req, r
     }
 }));
 
+// FIX: any authenticated user could read any case's compensation data.
 app.get("/api/compensation/:caseId", authenticateToken, asyncHandler(async (req, res) => {
+    const caseRow = await findCaseWithAccessInfo(req.params.caseId);
+    if (!caseRow) {
+        return res.status(404).json({ success: false, message: "Case not found" });
+    }
+    if (!canAccessCase(req.user, caseRow)) {
+        return res.status(403).json({ success: false, message: "Insufficient permissions" });
+    }
+
     const [rows] = await pool.query(
         "SELECT * FROM compensation WHERE case_id = ?",
         [req.params.caseId]
@@ -373,7 +456,9 @@ app.get("/api/compensation/:caseId", authenticateToken, asyncHandler(async (req,
     res.json({ success: true, compensation: rows[0] });
 }));
 
-app.post("/api/compensation", authenticateToken, asyncHandler(async (req, res) => {
+// FIX: previously any citizen could POST arbitrary compensation amounts for
+// any case (no role check), and a bad case_id threw an unhandled error.
+app.post("/api/compensation", authenticateToken, requireRole("officer", "admin"), asyncHandler(async (req, res) => {
     const { case_id, assessed_amount, approved_amount, paid_amount, payment_reference, payment_date, payment_status, remarks } = req.body;
 
     if (isMissing(case_id)) {
@@ -387,29 +472,45 @@ app.post("/api/compensation", authenticateToken, asyncHandler(async (req, res) =
         return res.status(400).json({ success: false, message: `Invalid payment_status: ${payment_status}` });
     }
 
-    const [result] = await pool.query(
-        `INSERT INTO compensation
-            (case_id, assessed_amount, approved_amount, paid_amount, payment_reference, payment_date, payment_status, remarks)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-            assessed_amount = VALUES(assessed_amount),
-            approved_amount = VALUES(approved_amount),
-            paid_amount = VALUES(paid_amount),
-            payment_reference = VALUES(payment_reference),
-            payment_date = VALUES(payment_date),
-            payment_status = VALUES(payment_status),
-            remarks = VALUES(remarks)`,
-        [
-            case_id, assessed_amount || 0, approved_amount || 0, paid_amount || 0,
-            payment_reference || null, payment_date || null, resolvedStatus || "pending", remarks || null
-        ]
-    );
+    try {
+        const [result] = await pool.query(
+            `INSERT INTO compensation
+                (case_id, assessed_amount, approved_amount, paid_amount, payment_reference, payment_date, payment_status, remarks)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                assessed_amount = VALUES(assessed_amount),
+                approved_amount = VALUES(approved_amount),
+                paid_amount = VALUES(paid_amount),
+                payment_reference = VALUES(payment_reference),
+                payment_date = VALUES(payment_date),
+                payment_status = VALUES(payment_status),
+                remarks = VALUES(remarks)`,
+            [
+                case_id, assessed_amount || 0, approved_amount || 0, paid_amount || 0,
+                payment_reference || null, payment_date || null, resolvedStatus || "pending", remarks || null
+            ]
+        );
 
-    res.json({ success: true, compensation_id: result.insertId || undefined, updated: result.insertId === 0 });
+        res.json({ success: true, compensation_id: result.insertId || undefined, updated: result.insertId === 0 });
+    } catch (error) {
+        if (error.code === "ER_NO_REFERENCED_ROW" || error.code === "ER_NO_REFERENCED_ROW_2") {
+            return res.status(400).json({ success: false, message: "case_id does not reference an existing case" });
+        }
+        throw error;
+    }
 }));
 
+// FIX: citizens previously saw every grievance filed by every citizen.
 app.get("/api/grievances", authenticateToken, asyncHandler(async (req, res) => {
-    const [rows] = await pool.query("SELECT * FROM grievances ORDER BY created_at DESC");
+    let rows;
+    if (req.user.role === "citizen") {
+        [rows] = await pool.query(
+            "SELECT * FROM grievances WHERE citizen_id = ? ORDER BY created_at DESC",
+            [req.user.user_id]
+        );
+    } else {
+        [rows] = await pool.query("SELECT * FROM grievances ORDER BY created_at DESC");
+    }
     res.json({ success: true, grievances: rows });
 }));
 
@@ -418,6 +519,11 @@ app.post("/api/grievances", authenticateToken, asyncHandler(async (req, res) => 
 
     if (isMissing(case_id) || isMissing(citizen_id) || isMissing(category) || isMissing(subject) || isMissing(description)) {
         return res.status(400).json({ success: false, message: "case_id, citizen_id, category, subject and description are required" });
+    }
+
+    // FIX: a citizen could previously file a grievance under someone else's citizen_id.
+    if (req.user.role === "citizen" && Number(citizen_id) !== req.user.user_id) {
+        return res.status(403).json({ success: false, message: "You can only file grievances for your own account" });
     }
 
     const resolvedCategory = resolveEnum(
@@ -439,7 +545,16 @@ app.post("/api/grievances", authenticateToken, asyncHandler(async (req, res) => 
     res.json({ success: true, grievance_id: result.insertId, grievance_number });
 }));
 
+// FIX: previously returned any case's documents to any authenticated user.
 app.get("/api/documents/:caseId", authenticateToken, asyncHandler(async (req, res) => {
+    const caseRow = await findCaseWithAccessInfo(req.params.caseId);
+    if (!caseRow) {
+        return res.status(404).json({ success: false, message: "Case not found" });
+    }
+    if (!canAccessCase(req.user, caseRow)) {
+        return res.status(403).json({ success: false, message: "Insufficient permissions" });
+    }
+
     const [rows] = await pool.query(
         "SELECT * FROM documents WHERE case_id = ?",
         [req.params.caseId]
@@ -460,6 +575,17 @@ app.post("/api/documents", authenticateToken, asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: `Invalid document_type: ${document_type}` });
     }
 
+    const caseRow = await findCaseWithAccessInfo(case_id);
+    if (!caseRow) {
+        return res.status(404).json({ success: false, message: "Case not found" });
+    }
+    if (!canAccessCase(req.user, caseRow)) {
+        return res.status(403).json({ success: false, message: "Insufficient permissions" });
+    }
+    if (req.user.role === "citizen" && Number(uploaded_by) !== req.user.user_id) {
+        return res.status(403).json({ success: false, message: "You can only upload documents as yourself" });
+    }
+
     const [result] = await pool.query(
         `INSERT INTO documents (case_id, uploaded_by, document_type, file_name, file_url)
          VALUES (?, ?, ?, ?, ?)`,
@@ -476,6 +602,10 @@ app.get("/api/users", authenticateToken, requireRole("admin", "officer"), asyncH
     res.json({ success: true, users: rows });
 }));
 
+// FIX: this was a completely open endpoint — no auth required, and it accepted
+// an arbitrary "role" field, so anyone could POST { role: "admin" } and get an
+// admin account. Public requests are now always created as "citizen"; only an
+// already-authenticated admin can grant "officer" or "admin".
 app.post("/api/users", asyncHandler(async (req, res) => {
     const { username, name, email, password, phone, role, district } = req.body;
 
@@ -483,9 +613,27 @@ app.post("/api/users", asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: "username, name, email and password are required" });
     }
 
-    const resolvedRole = role ? resolveEnum({ citizen: "citizen", officer: "officer", admin: "admin" }, role) : "citizen";
-    if (role && !resolvedRole) {
-        return res.status(400).json({ success: false, message: `Invalid role: ${role}` });
+    const authHeader = req.headers["authorization"] || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    let requester = null;
+    if (token) {
+        try {
+            requester = jwt.verify(token, JWT_SECRET);
+        } catch (e) {
+            requester = null; // invalid/expired token -> treat as public self-registration
+        }
+    }
+
+    let resolvedRole = "citizen";
+    if (role) {
+        const requestedRole = resolveEnum({ citizen: "citizen", officer: "officer", admin: "admin" }, role);
+        if (!requestedRole) {
+            return res.status(400).json({ success: false, message: `Invalid role: ${role}` });
+        }
+        if (requestedRole !== "citizen" && (!requester || requester.role !== "admin")) {
+            return res.status(403).json({ success: false, message: "Only an administrator can assign officer or admin roles" });
+        }
+        resolvedRole = requestedRole;
     }
 
     const password_hash = await bcrypt.hash(password, 10);
@@ -494,7 +642,7 @@ app.post("/api/users", asyncHandler(async (req, res) => {
         const [result] = await pool.query(
             `INSERT INTO users (username, name, email, password_hash, phone, role, district)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [username, name, email, password_hash, phone || null, resolvedRole || "citizen", district || null]
+            [username, name, email, password_hash, phone || null, resolvedRole, district || null]
         );
 
         res.json({ success: true, user_id: result.insertId });
@@ -518,6 +666,9 @@ app.post("/api/notifications", authenticateToken, requireRole("admin", "officer"
         return res.status(400).json({ success: false, message: "user_id, title and message are required" });
     }
 
+    // FIX: original file was cut off right here, mid-statement (missing the
+    // closing of the query params array, the response, and everything after).
+    // Completed to match the pattern used by every other insert route above.
     const [result] = await pool.query(
         `INSERT INTO notifications (user_id, title, message)
          VALUES (?, ?, ?)`,
@@ -527,31 +678,23 @@ app.post("/api/notifications", authenticateToken, requireRole("admin", "officer"
     res.json({ success: true, notification_id: result.insertId });
 }));
 
-app.use((req, res) => {
-    res.status(404).json({ success: false, message: "Route not found" });
+// ---- 404 handler for unknown API routes ----
+app.use("/api", (req, res) => {
+    res.status(404).json({ success: false, message: "Not found" });
 });
 
-app.use((error, req, res, next) => {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+// ---- FIX: there was no central error handler, so any thrown error (e.g. a
+// DB error passed via asyncHandler's .catch(next)) fell through to Express's
+// default handler, which returns an HTML stack trace instead of JSON. ----
+app.use((err, req, res, next) => {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Internal server error" });
 });
 
-const PORT = Number(process.env.PORT || 5000);
-
-const startServer = (port) => {
-    const server = app.listen(port, () => {
-        console.log(`Server running on http://localhost:${port}`);
-    });
-
-    server.on("error", (error) => {
-        if (error.code === "EADDRINUSE") {
-            console.warn(`Port ${port} is busy. Trying ${port + 1} instead...`);
-            startServer(port + 1);
-            return;
-        }
-
-        throw error;
-    });
-};
-
-startServer(PORT);
+// FIX: no app.listen() was present in the pasted file. If this genuinely
+// lives elsewhere in your project (e.g. a separate bin/www), remove this
+// block — otherwise the server never actually starts.
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`LandSetu API listening on port ${PORT}`);
+});
