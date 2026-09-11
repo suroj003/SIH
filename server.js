@@ -23,6 +23,13 @@ if (!JWT_SECRET) {
     process.exit(1);
 }
 
+// ---- Hardcoded demo users (DB is empty, used as fallback for login) ----
+const HARDCODED_USERS = [
+    { user_id: 1, username: "citizen", name: "Citizen User", password: "12345", role: "citizen" },
+    { user_id: 2, username: "administrator", name: "Administrator", password: "12345", role: "admin" },
+    { user_id: 3, username: "landofficer", name: "Land Officer", password: "12345", role: "officer" }
+];
+
 function asyncHandler(fn) {
     return (req, res, next) => fn(req, res, next).catch(next);
 }
@@ -107,6 +114,30 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
         return res.status(400).json({ success: false, message: "username and password are required" });
     }
 
+    // 1. Check hardcoded demo users first (since DB is empty)
+    const hardcodedUser = HARDCODED_USERS.find(u => u.username === username);
+    if (hardcodedUser) {
+        if (hardcodedUser.password !== password) {
+            return res.status(401).json({ success: false, message: "Invalid credentials" });
+        }
+
+        const token = jwt.sign(
+            { user_id: hardcodedUser.user_id, role: hardcodedUser.role },
+            JWT_SECRET,
+            { expiresIn: "8h" }
+        );
+
+        return res.json({
+            success: true,
+            token,
+            user_id: hardcodedUser.user_id,
+            username: hardcodedUser.username,
+            name: hardcodedUser.name,
+            role: hardcodedUser.role
+        });
+    }
+
+    // 2. Fall back to DB lookup (normal flow, unchanged)
     const [rows] = await pool.query(
         "SELECT user_id, username, name, password_hash, role FROM users WHERE username = ?",
         [username]
