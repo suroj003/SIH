@@ -67,8 +67,7 @@ SIH/
 ├── server.js
 │
 ├── main_db.sql
-├── DataBase.sql
-│
+|
 ├── package.json
 ├── package-lock.json
 ├── .gitignore
